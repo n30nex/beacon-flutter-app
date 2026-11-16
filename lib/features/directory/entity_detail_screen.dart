@@ -290,8 +290,7 @@ class _EntityDetailScreenState extends State<EntityDetailScreen>
         if (widget.kind == 'channel') {
           // Server receipt order is stable even when a sender's clock is wrong.
           history.sort(
-            (a, b) =>
-                (number(a['id']) ?? 0).compareTo(number(b['id']) ?? 0),
+            (a, b) => (number(a['id']) ?? 0).compareTo(number(b['id']) ?? 0),
           );
         }
         if (widget.kind == 'route') {
