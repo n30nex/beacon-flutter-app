@@ -52,8 +52,9 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
   Map<String, TelemetryLabel> _labels = const {};
   List<Map<String, dynamic>> _readings = const [];
   bool _resumed = true;
+  bool _visible = true;
   bool _flow = false;
-  bool get _flowAllowed => _flow && _resumed;
+  bool get _flowAllowed => _flow && _resumed && _visible;
   final _flows = <Map<String, dynamic>>[];
   late final _flowClock = widget.flowClock ?? Stopwatch();
   List<Map<String, dynamic>> _nodes = [],
@@ -98,6 +99,15 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
     });
     if (_showBorders) unawaited(_loadBorders());
     _syncTelemetry();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final visible = TickerMode.valuesOf(context).enabled;
+    if (_visible == visible) return;
+    _visible = visible;
+    _listenFlow();
   }
 
   Future<void> _save() async {
