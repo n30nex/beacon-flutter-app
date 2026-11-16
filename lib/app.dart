@@ -29,7 +29,6 @@ import 'features/map/map_screen.dart';
 import 'features/packets/packet_detail.dart';
 import 'features/packets/packet_screen.dart';
 import 'features/settings/settings_page.dart';
-import 'features/telemetry/session.dart';
 
 class BeaconApp extends StatefulWidget {
   const BeaconApp({
@@ -75,7 +74,6 @@ class BeaconApp extends StatefulWidget {
 }
 
 class _BeaconAppState extends State<BeaconApp> with WidgetsBindingObserver {
-  late final telemetry = TelemetrySession(widget.preferences);
   final navigator = GlobalKey<NavigatorState>();
   late final VersionGate gate =
       widget.versionGate ??
@@ -115,7 +113,6 @@ class _BeaconAppState extends State<BeaconApp> with WidgetsBindingObserver {
       if (mounted) (context as Element).visitChildren(rebuild);
     }
     if (active != widget.preferences.active?.url) {
-      unawaited(telemetry.disconnect());
       active = widget.preferences.active?.url;
       final server = widget.preferences.active;
       // A result the server editor produced moments ago is still current.
@@ -151,7 +148,6 @@ class _BeaconAppState extends State<BeaconApp> with WidgetsBindingObserver {
 
   @override
   void dispose() {
-    telemetry.dispose();
     WidgetsBinding.instance.removeObserver(this);
     widget.preferences.removeListener(changed);
     gate.removeListener(gateChanged);
@@ -209,10 +205,7 @@ class _BeaconAppState extends State<BeaconApp> with WidgetsBindingObserver {
       ),
     );
     final flow = widget.signInFlow;
-    return TelemetryScope(
-      session: telemetry,
-      child: flow == null ? app : SignInScope(flow: flow, child: app),
-    );
+    return flow == null ? app : SignInScope(flow: flow, child: app);
   }
 }
 

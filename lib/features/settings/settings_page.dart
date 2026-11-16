@@ -11,8 +11,6 @@ import '../../core/version_gate.dart';
 import '../account/account_section.dart';
 import '../atlas/atlas_settings.dart';
 import '../atlas/atlas_store.dart';
-import '../telemetry/session.dart';
-import '../telemetry/telemetry_page.dart';
 
 /// "Version 0.2.0" for releases, "Beta build 1791597587" for dev/beta builds.
 String versionLabel(String? version) {
@@ -85,23 +83,6 @@ class SettingsPage extends StatelessWidget {
             leading: const Icon(Icons.add, size: 20),
             title: Text(tr('Add server')),
             onTap: () => showServerEditor(context, preferences),
-          ),
-          const Divider(),
-          ListTile(
-            leading: const Icon(Icons.sensors_outlined),
-            title: Text(tr('Telemetry sharing')),
-            subtitle: Text(tr('Optional companion polling · alpha')),
-            trailing: const Icon(Icons.chevron_right, size: 20),
-            onTap: preferences.active == null
-                ? null
-                : () => Navigator.of(context).push(
-                    MaterialPageRoute<void>(
-                      builder: (_) => TelemetryPage(
-                        instance: preferences.active!,
-                        session: TelemetryScope.of(context),
-                      ),
-                    ),
-                  ),
           ),
           const Divider(),
           _heading(context, tr('Appearance')),

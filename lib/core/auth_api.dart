@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 
 import 'api.dart';
+import 'features.dart';
 import 'json.dart';
 import 'token_store.dart';
 
@@ -66,22 +67,24 @@ class AuthApi {
     String? sentToken,
     bool tokenKnown = false,
   }) async {
-    final request = http.Request(method, _uri(path));
     // The stored token is the session generation: a request owns the one it
     // sent, whichever AuthApi of this server made it.
     final token = !authorize
         ? null
         : (tokenKnown ? sentToken : await tokens.read(base));
-    if (token != null) request.headers['Authorization'] = 'Bearer $token';
-    if (body != null) {
-      request.headers['Content-Type'] = 'application/json';
-      request.body = jsonEncode(body);
-    }
     http.Response response;
     try {
-      response = await http.Response.fromStream(
-        await _client.send(request).timeout(const Duration(seconds: 25)),
-      ).timeout(const Duration(seconds: 25));
+      response = await requestLimited(
+        _client,
+        method,
+        _uri(path),
+        1024 * 1024,
+        headers: {
+          if (token != null) 'Authorization': 'Bearer $token',
+          if (body != null) 'Content-Type': 'application/json',
+        },
+        body: body == null ? null : jsonEncode(body),
+      );
     } on TimeoutException {
       throw const ApiException(
         'The server took too long to respond. Try again.',
@@ -335,6 +338,27 @@ class AuthApi {
   /// Removes the push token of this session.
   Future<void> removeDevice() async {
     await send('DELETE', '/me/devices');
+  }
+
+  bool? _atlasTelemetry;
+  DateTime? _atlasTelemetryAt;
+
+  /// Whether the server stores Telemetry tiles and views in the account Atlas.
+  /// Read from `/info`, kept for a few minutes; any failure reads as no.
+  Future<bool> atlasTelemetry() async {
+    final at = _atlasTelemetryAt;
+    if (at != null &&
+        DateTime.now().difference(at) < const Duration(minutes: 5)) {
+      return _atlasTelemetry ?? false;
+    }
+    try {
+      final info = await _request('GET', '/info', authorize: false);
+      _atlasTelemetry = ServerFeatures.fromInfo(info).atlasTelemetry;
+      _atlasTelemetryAt = DateTime.now();
+      return _atlasTelemetry!;
+    } catch (_) {
+      return false;
+    }
   }
 
   /// The account Atlas as the server holds it.
