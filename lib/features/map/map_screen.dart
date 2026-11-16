@@ -184,11 +184,9 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
       while (_flows.length >= 120) {
         _flows.removeAt(0);
       }
-      _flows.add({'nodes': ns, 'start': DateTime.now().millisecondsSinceEpoch});
-      _flowTimer ??= Timer.periodic(
-        const Duration(milliseconds: 50),
-        (_) => _tick(),
-      );
+      _flowClock.start();
+      _flows.add({'nodes': ns, 'start': _flowClock.elapsedMilliseconds});
+      _flowTimer ??= Timer.periodic(_flowInterval, (_) => _tick());
     }
   }
 
