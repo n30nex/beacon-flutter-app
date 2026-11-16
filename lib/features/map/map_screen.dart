@@ -662,7 +662,7 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
                               ),
                             if (mode == 'selected')
                               Text(
-                                '${tr('Observations')}: 1 Ã‚Â· 20 Ã‚Â· 150+\n${tr('fainter = heard longer ago')}',
+                                '${tr('Observations')}: 1 · 20 · 150+\n${tr('fainter = heard longer ago')}',
                                 style: TextStyle(
                                   fontSize: 10,
                                   color: BeaconColors.of(context).normal,
@@ -750,8 +750,8 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
                   if (_visibleCount != null)
                     tr('{{count}} visible')
                         .replaceAll('{{count}}', '$_visibleCount'),
-                  if (_loading) tr('LoadingÃ¢â‚¬Â¦'),
-                ].join(' Ã‚Â· '),
+                  if (_loading) tr('Loading…'),
+                ].join(' · '),
                 maxLines: 2,
                 overflow: TextOverflow.ellipsis,
                 style: const TextStyle(
@@ -816,7 +816,7 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
                   overflow: TextOverflow.ellipsis,
                 ),
                 subtitle: Text(
-                  '${textOf(selected['nodeTypeName'])} Ã‚Â· ${textOf(selected['lat'])}, ${textOf(selected['lng'])}',
+                  '${textOf(selected['nodeTypeName'])} · ${textOf(selected['lat'])}, ${textOf(selected['lng'])}',
                   style: const TextStyle(
                     fontSize: 10,
                     fontFamily: 'JetBrainsMono',
