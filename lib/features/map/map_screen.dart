@@ -107,6 +107,7 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
     final visible = TickerMode.valuesOf(context).enabled;
     if (_visible == visible) return;
     _visible = visible;
+    if (!visible) _clearFlow();
     _listenFlow();
   }
 
@@ -661,7 +662,7 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
                               ),
                             if (mode == 'selected')
                               Text(
-                                '${tr('Observations')}: 1 Â· 20 Â· 150+\n${tr('fainter = heard longer ago')}',
+                                '${tr('Observations')}: 1 Ã‚Â· 20 Ã‚Â· 150+\n${tr('fainter = heard longer ago')}',
                                 style: TextStyle(
                                   fontSize: 10,
                                   color: BeaconColors.of(context).normal,
@@ -749,8 +750,8 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
                   if (_visibleCount != null)
                     tr('{{count}} visible')
                         .replaceAll('{{count}}', '$_visibleCount'),
-                  if (_loading) tr('Loadingâ€¦'),
-                ].join(' Â· '),
+                  if (_loading) tr('LoadingÃ¢â‚¬Â¦'),
+                ].join(' Ã‚Â· '),
                 maxLines: 2,
                 overflow: TextOverflow.ellipsis,
                 style: const TextStyle(
@@ -815,7 +816,7 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
                   overflow: TextOverflow.ellipsis,
                 ),
                 subtitle: Text(
-                  '${textOf(selected['nodeTypeName'])} Â· ${textOf(selected['lat'])}, ${textOf(selected['lng'])}',
+                  '${textOf(selected['nodeTypeName'])} Ã‚Â· ${textOf(selected['lat'])}, ${textOf(selected['lng'])}',
                   style: const TextStyle(
                     fontSize: 10,
                     fontFamily: 'JetBrainsMono',
