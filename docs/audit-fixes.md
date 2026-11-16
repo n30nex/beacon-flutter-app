@@ -1,6 +1,6 @@
 # Development audit fixes — November 2026
 
-This candidate is based on upstream dev `ec35a4d`. It uses upstream's native
+This candidate is based on upstream dev `d8fb8f6`. It uses upstream's native
 telemetry views and server coordination. It does not contain the earlier BLE/Wi-Fi
 collector, background collection service or independent intake protocol.
 
