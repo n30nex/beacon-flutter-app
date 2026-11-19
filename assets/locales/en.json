@@ -970,6 +970,7 @@
       "manageServers": "Manage servers",
       "removeServer": "Remove server",
       "licenses": "Licenses",
+      "kofi": "Support on Ko-fi",
       "notBeacon": "This server does not appear to expose the Beacon API.",
       "invalidUrl": "Enter a complete http:// or https:// server URL without credentials, query or fragment.",
       "betaBuild": "Beta build",
@@ -1307,6 +1308,8 @@
     },
     "account": {
       "heading": "Account on {{server}}",
+      "signedInAs": "Signed in as {{name}}",
+      "signedIn": "Signed in",
       "signIn": "Sign in",
       "signInNote": "Your browser opens so you can sign in, then returns you to the app.",
       "signInPortal": "Sign in with MeshMapper",
@@ -1420,8 +1423,6 @@
       "title": "Alerts",
       "retry": "Retry",
       "toEmail": "Alerts are sent to {{email}}",
-      "byEmail": "Alerts are sent to your email address.",
-      "toPhone": "Alerts are sent to the Beacon app on your phone",
       "empty": "Alerts are set on radios in your Atlas. Add a radio there first.",
       "requestAttention": "You are always told when one of your telemetry requests needs attention.",
       "needsGoneQuiet": "Turn on {{name}} first.",
@@ -1613,6 +1614,22 @@
     "atlasLimits": {
       "overLimit_one": "This server allows {{count}} card. Remove {{remove}} more to save your Atlas to your account.",
       "overLimit_other": "This server allows {{count}} cards. Remove {{remove}} more to save your Atlas to your account."
+    },
+    "alertChannels": {
+      "title": "How alerts reach you",
+      "email": "Email",
+      "push": "Push",
+      "thisServer": "this server",
+      "reason": {
+        "server_off": "This server doesn't send alert emails.",
+        "portal_account": "Accounts that sign in through the portal have no email address here.",
+        "unverified_email": "Confirm your email address to get alert emails.",
+        "other": "Alert emails are not available for this account."
+      },
+      "pushOff": "This server doesn't send push notifications.",
+      "pushVia": "Alerts from {{server}} are delivered via the MeshCore Beacon push server. It sees which server sent them, not what they say.",
+      "noChannel": "Email and push are both off, so your alerts won't reach you.",
+      "failed": "Could not change this. Try again."
     }
   }
 }

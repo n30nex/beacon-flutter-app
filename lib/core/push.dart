@@ -1,33 +1,42 @@
 import 'dart:async';
+import 'dart:convert';
+import 'dart:math';
 
 import 'package:flutter/foundation.dart';
 
 import 'account.dart';
 import 'api.dart';
+import 'auth_api.dart';
 import 'features.dart';
 import 'json.dart';
+import 'push_notice.dart';
+import 'push_relay.dart';
+import 'push_store.dart';
 
 enum PushPermission { granted, denied, notAsked }
 
-/// Everything the app needs from a push plugin. The Firebase one lives in
-/// push_firebase.dart; tests use a fake and a build without Firebase
-/// configuration answers false from `available()`.
+/// Everything the app needs from push: APNs on iOS (push_apns.dart), FCM on
+/// Android (push_firebase.dart). Tests use a fake.
 abstract class PushClient {
-  /// The OS name the server's `/me/devices` expects: ios or android.
+  /// The OS name the push server and `/me/devices` expect: ios or android.
   String get platform;
 
-  /// True only when this build carries Firebase configuration.
+  /// False when this build cannot get push, e.g. Android without Firebase
+  /// configuration.
   Future<bool> available();
   Future<PushPermission> permission();
   Future<PushPermission> requestPermission();
   Future<String?> token();
   Stream<String> get tokenRefreshes;
-  Future<void> deleteToken();
 
-  /// The data payload of each notification the user taps while the app runs.
+  /// sandbox or production for an iOS token; null on Android.
+  Future<String?> apnsEnvironment();
+
+  /// The data of each notification the user taps while the app runs: the
+  /// push server's sealed data on iOS, the shown notification's payload on Android.
   Stream<Json> get opened;
 
-  /// The payload of the notification that launched the app, if any.
+  /// The same for the notification that launched the app, if any.
   Future<Json?> initialMessage();
 }
 
@@ -47,47 +56,215 @@ class NoPush implements PushClient {
   @override
   Stream<String> get tokenRefreshes => const Stream.empty();
   @override
-  Future<void> deleteToken() async {}
+  Future<String?> apnsEnvironment() async => null;
   @override
   Stream<Json> get opened => const Stream.empty();
   @override
   Future<Json?> initialMessage() async => null;
 }
 
+/// The radio a tapped notification names, on the server that sent it.
+class PushTarget {
+  const PushTarget(this.url, this.kind, this.publicKey, this.id);
+  final String url, kind, publicKey;
+
+  /// The radio's node or observer id; null when the notice has none.
+  final String? id;
+}
+
+/// App-wide push state: the stored handles, token refreshes and taps, which
+/// belong to no single server.
+class PushHub {
+  PushHub({
+    required this.client,
+    required this.store,
+    required this.relay,
+    int Function()? random,
+  }) : _random = random ?? _secureByte;
+  final PushClient client;
+  final PushStore store;
+  final PushRelay relay;
+  final int Function() _random;
+  static final _secure = Random.secure();
+  static int _secureByte() => _secure.nextInt(256);
+
+  /// The active server and how to switch to another, set by the app shell.
+  String? Function() activeUrl = () => null;
+  Future<void> Function(String url) selectServer = (_) async {};
+
+  final _handlers = <String, void Function(PushTarget)>{};
+  PushTarget? _pending;
+  StreamSubscription<String>? _refreshes;
+  StreamSubscription<Json>? _taps;
+  Future<void>? _started;
+
+  /// A fresh 32-byte payload key from a secure source.
+  String newKey() => base64.encode([for (var i = 0; i < 32; i++) _random()]);
+
+  /// Listens for token refreshes and taps; safe to call more than once.
+  Future<void> start() => _started ??= _start();
+
+  Future<void> _start() async {
+    if (!await client.available()) return;
+    _refreshes = client.tokenRefreshes.listen(_tokenChanged);
+    _taps = client.opened.listen(tap);
+    try {
+      final first = await client.initialMessage();
+      if (first != null) await tap(first);
+    } catch (_) {}
+    try {
+      await _reconcile();
+    } catch (_) {}
+  }
+
+  /// Catches up handles a refresh missed or failed to move, once per launch.
+  Future<void> _reconcile() async {
+    if ((await store.all()).isEmpty) return;
+    if (await client.permission() != PushPermission.granted) return;
+    final token = await client.token();
+    if (token != null) await _tokenChanged(token);
+  }
+
+  /// The handles stay; only the token behind them moves. An entry keeps its
+  /// old token until the push server takes the new one, so it retries later.
+  Future<void> _tokenChanged(String token) async {
+    if (token.isEmpty) return;
+    final stale = [
+      for (final e in await store.all())
+        if (e.token != token) e,
+    ];
+    if (stale.isEmpty) return;
+    final environment = await client.apnsEnvironment();
+    for (final e in stale) {
+      try {
+        await relay.updateHandle(
+          e.relay,
+          e.handle,
+          handleSecret: e.handleSecret,
+          token: token,
+          apnsEnvironment: environment,
+        );
+        await store.write(e.copyWith(token: token));
+      } catch (_) {}
+    }
+  }
+
+  /// Opens a tapped notification's radio, switching servers when needed.
+  Future<void> tap(Json data) async {
+    final target = await resolve(data);
+    if (target == null) return;
+    final handler = _handlers[target.url];
+    if (activeUrl() == target.url && handler != null) return handler(target);
+    _pending = target;
+    if (activeUrl() != target.url) await selectServer(target.url);
+  }
+
+  /// The tap's radio, or null when it is not from a server this phone knows.
+  Future<PushTarget?> resolve(Json data) async {
+    final pushId = textOf(data['pushId']);
+    if (pushId.isEmpty) return null;
+    final entry = await store.read(pushId);
+    if (entry == null) return null;
+    var kind = textOf(data['targetKind']);
+    var key = textOf(data['publicKey']);
+    var id = textOf(data['id']);
+    if (data['ct'] != null) {
+      final notice = await openNotice(entry.keyBytes, pushId, data['ct']);
+      if (notice == null) return null;
+      (kind, key, id) = (notice.targetKind, notice.publicKey, notice.id);
+    }
+    if (key.isEmpty) return null;
+    return PushTarget(
+      entry.url,
+      kind.isEmpty ? 'node' : kind,
+      key,
+      id.isEmpty ? null : id,
+    );
+  }
+
+  /// A server's home screen takes the taps for it, and one that waited.
+  void attach(String url, void Function(PushTarget) handler) {
+    _handlers[url] = handler;
+    final pending = _pending;
+    if (pending != null && pending.url == url) {
+      _pending = null;
+      handler(pending);
+    }
+  }
+
+  void detach(String url, void Function(PushTarget) handler) {
+    if (_handlers[url] == handler) _handlers.remove(url);
+  }
+
+  /// For a server being removed: its device, then its handle, then the entry.
+  Future<void> forget(String url, AuthApi api) async {
+    final entry = await store.forUrl(url);
+    if (entry == null) return;
+    await _remove(entry, api);
+  }
+
+  Future<void> _remove(PushEntry entry, AuthApi? api) async {
+    try {
+      await api?.removeDevice();
+    } catch (_) {}
+    try {
+      await relay.deleteHandle(
+        entry.relay,
+        entry.handle,
+        handleSecret: entry.handleSecret,
+      );
+    } catch (_) {}
+    try {
+      await store.delete(entry.pushId);
+    } catch (_) {}
+  }
+
+  void dispose() {
+    _refreshes?.cancel();
+    _taps?.cancel();
+  }
+}
+
 enum PushStatus {
-  /// Signed out, or the server does not deliver alerts by push.
+  /// Signed out, or the server does not send push.
   off,
 
-  /// Push delivery, but this build has no Firebase configuration.
+  /// The server sends push, but this build cannot get push (Android without
+  /// Firebase configuration).
   notSetUp,
   needsPermission,
   denied,
+
+  /// The user turned push off for this account; nothing is registered.
+  paused,
   registered,
   failed,
 }
 
-/// Keeps this phone's push token registered for the signed-in account.
-/// Permission is only ever asked for by [enable], never by [refresh].
+/// Keeps this phone registered with one server through the push server, for
+/// the signed-in account. Permission is only asked for by [enable].
 class PushRegistration extends ChangeNotifier {
   PushRegistration({
-    required this.client,
+    required this.hub,
     required this.account,
     required this.features,
+    required this.serverUrl,
+    required this.serverName,
   }) {
     account.addListener(_accountChanged);
   }
-  final PushClient client;
+  final PushHub hub;
   final AccountState account;
   final Future<ServerFeatures> Function() features;
 
-  /// Called with (targetKind, publicKey, id) when a notification is tapped; id
-  /// is the radio's node or observer id, null when the payload has none.
-  void Function(String kind, String publicKey, String? id)? onOpened;
+  /// The saved server this registration is for, and its current name.
+  final String serverUrl;
+  final String Function() serverName;
+
+  PushClient get client => hub.client;
 
   PushStatus status = PushStatus.off;
-  StreamSubscription<String>? _refreshes;
-  StreamSubscription<Json>? _taps;
-  bool _launchChecked = false, _disposed = false, _wasSignedIn = false;
+  bool _disposed = false, _wasSignedIn = false;
   int _generation = 0;
 
   void _accountChanged() {
@@ -107,7 +284,8 @@ class PushRegistration extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Works out the state and, when permission is already granted, registers.
+  /// Works out the state and, when permission is granted and the user's push
+  /// switch is on, registers.
   Future<void> refresh() async {
     if (!account.signedIn) return _set(PushStatus.off);
     final generation = ++_generation;
@@ -116,13 +294,19 @@ class PushRegistration extends ChangeNotifier {
     try {
       final f = await features();
       if (gone()) return;
-      if (!f.alerts || f.alertDelivery != 'push') return _set(PushStatus.off);
+      final info = f.push;
+      if (!f.alerts || info == null) return _set(PushStatus.off);
       if (!await client.available()) return _set(PushStatus.notSetUp);
       if (gone() || !account.signedIn) return;
-      _listenForTaps();
       switch (await client.permission()) {
         case PushPermission.granted:
-          await _register();
+          // Registering turns the switch on, so a user who turned it off stays off.
+          final channels = object((await account.api.alerts())['channels']);
+          if (gone()) return;
+          if (object(channels['push'])['enabled'] == false) {
+            return _set(PushStatus.paused);
+          }
+          await _register(info);
         case PushPermission.denied:
           _set(PushStatus.denied);
         case PushPermission.notAsked:
@@ -133,15 +317,16 @@ class PushRegistration extends ChangeNotifier {
     }
   }
 
-  /// Asks the OS for permission (from the Alerts section) and registers.
+  /// Asks the OS for permission (from the profile) and registers.
   Future<void> enable() async {
-    if (!account.signedIn || !await client.available()) {
-      return _set(PushStatus.notSetUp);
-    }
+    if (!account.signedIn) return _set(PushStatus.off);
     try {
+      final info = (await features()).push;
+      if (info == null) return _set(PushStatus.off);
+      if (!await client.available()) return _set(PushStatus.notSetUp);
       final result = await client.requestPermission();
       if (result == PushPermission.granted) {
-        await _register();
+        await _register(info);
       } else {
         _set(PushStatus.denied);
       }
@@ -150,67 +335,114 @@ class PushRegistration extends ChangeNotifier {
     }
   }
 
-  Future<void> _register() async {
+  Future<void> _register(PushServerInfo info) async {
     // A result from a session that has since ended says nothing about this one.
     final epoch = account.epoch;
     bool gone() => _disposed || account.epoch != epoch || !account.signedIn;
     final token = await client.token();
     if (gone()) return;
     if (token == null || token.isEmpty) return _set(PushStatus.failed);
+    final old = await hub.store.read(info.pushId);
+    final PushEntry entry;
     try {
-      await account.api.registerDevice(client.platform, token);
-    } on ApiException {
+      entry = await _handleFor(info, token, old);
+    } on Exception {
+      if (!gone()) _set(PushStatus.failed);
+      return;
+    }
+    // Stored before the server can seal anything for it.
+    await hub.store.write(entry);
+    if (gone()) return;
+    try {
+      await account.api.registerDevice(
+        client.platform,
+        entry.handle,
+        entry.key,
+      );
+    } on ApiException catch (e) {
       if (gone()) return;
-      return _set(PushStatus.failed);
+      return _set(
+        e.code == 'push_disabled' ? PushStatus.off : PushStatus.failed,
+      );
     }
     if (gone()) return;
-    _refreshes ??= client.tokenRefreshes.listen((next) async {
-      if (!account.signedIn || next.isEmpty) return;
-      final at = account.epoch;
-      try {
-        await account.api.registerDevice(client.platform, next);
-      } on ApiException {
-        if (account.epoch == at) _set(PushStatus.failed);
-      }
-    });
     _set(PushStatus.registered);
   }
 
-  void _listenForTaps() {
-    _taps ??= client.opened.listen(_tapped);
-    if (_launchChecked) return;
-    _launchChecked = true;
-    client.initialMessage().then((m) {
-      if (m != null) _tapped(m);
-    }, onError: (_) {});
+  /// The stored handle when it still fits, else one moved or made for [token].
+  /// Making one is rate-limited per IP at the push server, so it is the last resort.
+  Future<PushEntry> _handleFor(
+    PushServerInfo info,
+    String token,
+    PushEntry? old,
+  ) async {
+    final key = old?.key ?? hub.newKey();
+    final environment = await client.apnsEnvironment();
+    if (old != null && old.relay == info.server) {
+      final current = old.copyWith(
+        url: serverUrl,
+        name: serverName(),
+        token: token,
+      );
+      if (old.token == token) return current;
+      try {
+        await hub.relay.updateHandle(
+          old.relay,
+          old.handle,
+          handleSecret: old.handleSecret,
+          token: token,
+          apnsEnvironment: environment,
+        );
+        return current;
+      } on PushRelayException catch (e) {
+        if (e.status != 404) rethrow;
+      }
+    }
+    final (handle, secret) = await hub.relay.createHandle(
+      info.server,
+      pushId: info.pushId,
+      platform: client.platform,
+      token: token,
+      apnsEnvironment: environment,
+    );
+    if (old != null && old.relay != info.server) {
+      try {
+        await hub.relay.deleteHandle(
+          old.relay,
+          old.handle,
+          handleSecret: old.handleSecret,
+        );
+      } catch (_) {}
+    }
+    return PushEntry(
+      pushId: info.pushId,
+      relay: info.server,
+      handle: handle,
+      handleSecret: secret,
+      key: key,
+      url: serverUrl,
+      name: serverName(),
+      token: token,
+    );
   }
 
-  void _tapped(Json data) {
-    final kind = textOf(data['targetKind'], textOf(data['kind']));
-    final key = textOf(data['publicKey']);
-    if (kind.isEmpty || key.isEmpty) return;
-    final id = textOf(data['id']);
-    onOpened?.call(kind, key, id.isEmpty ? null : id);
-  }
-
-  /// Removes this phone from the account. Call before the session ends; a
-  /// failure must not stop the sign-out.
+  /// Removes this phone from the account and the push server. Call before the
+  /// session ends; a failure must not stop the sign-out.
   Future<void> unregister() async {
-    final active = status == PushStatus.registered;
     _stop();
-    if (!active) return;
+    PushEntry? entry;
     try {
-      await account.api.removeDevice();
+      entry = await hub.store.forUrl(serverUrl);
+      if (entry == null) {
+        final info = (await features()).push;
+        if (info != null) entry = await hub.store.read(info.pushId);
+      }
     } catch (_) {}
-    try {
-      await client.deleteToken();
-    } catch (_) {}
+    if (entry != null) await hub._remove(entry, account.api);
   }
 
   void _stop() {
     _generation++;
-    _refreshes?.cancel();
-    _refreshes = null;
     if (status != PushStatus.notSetUp) _set(PushStatus.off);
   }
 
@@ -218,8 +450,6 @@ class PushRegistration extends ChangeNotifier {
   void dispose() {
     _disposed = true;
     account.removeListener(_accountChanged);
-    _refreshes?.cancel();
-    _taps?.cancel();
     super.dispose();
   }
 }
